@@ -95,14 +95,27 @@ class DocumentProcessor:
             with Timer("Content extraction"):
                 extraction_result = self._route_and_extract(request, characteristics, document_type)
             
+            # Apply final LLM verification pass to fix any missing text
+            api_key = request.openai_api_key or request.anthropic_api_key
+            if api_key and extraction_result.get("text_content"):
+                with Timer("Final LLM verification"):
+                    logger.info("Running final LLM verification pass to ensure complete text extraction")
+                    verified_text = self._final_llm_verification(request, extraction_result["text_content"], api_key)
+                    if verified_text:
+                        extraction_result["text_content"] = verified_text
+                        logger.info("Final LLM verification completed and fixes applied")
+            
             # Apply quality assurance
             with Timer("Quality assurance"):
                 qa_result = self._apply_quality_assurance(
                     extraction_result, request.run_mode
                 )
             
-            # Apply vision validation if enabled
-            if request.enable_vision_validation and request.anthropic_api_key:
+            # Apply vision validation if enabled (only for PDFs, not Word docs)
+            document_path = getattr(request, 'document_path', None) or getattr(request, 'pdf_path', None)
+            is_pdf = document_path and document_path.suffix.lower() == '.pdf'
+            
+            if request.enable_vision_validation and (request.openai_api_key or request.anthropic_api_key) and is_pdf:
                 with Timer("Vision validation"):
                     vision_result = self._apply_vision_validation(
                         request, extraction_result, qa_result
@@ -111,6 +124,8 @@ class DocumentProcessor:
                     qa_result["qa_metrics"] = self._enhance_metrics_with_vision(
                         qa_result["qa_metrics"], vision_result
                     )
+            elif is_pdf == False:
+                logger.info("Skipping vision validation for Word documents (not supported)")
             
             # Apply compliance checks
             with Timer("Compliance checks"):
@@ -307,17 +322,20 @@ class DocumentProcessor:
         return result
     
     def _extract_standard(self, request: ProcessingRequest, characteristics: Dict[str, Any]) -> Dict[str, Any]:
-        """Standard text extraction for born-digital PDFs."""
+        """Standard text extraction for born-digital PDFs. Uses LLM vision if available."""
         result = {"text_content": "", "provenance": [], "defects": []}
         
         try:
             # Get document path (support both old and new field names)
             document_path = getattr(request, 'document_path', None) or getattr(request, 'pdf_path', None)
             
+            # Get API key for LLM vision extraction (preferred for all PDFs)
+            api_key = request.openai_api_key or request.anthropic_api_key
+            
             if document_path:
-                text_result = self.text_extractor.extract_text(document_path)
+                text_result = self.text_extractor.extract_text(document_path, api_key=api_key, use_llm=True)
             elif request.pdf_bytes:
-                text_result = self.text_extractor.extract_text_from_bytes(request.pdf_bytes)
+                text_result = self.text_extractor.extract_text_from_bytes(request.pdf_bytes, api_key=api_key, use_llm=True)
             else:
                 raise ValueError("No document path or bytes provided")
             
@@ -530,6 +548,116 @@ class DocumentProcessor:
         )
         
         return result
+    
+    def _final_llm_verification(self, request: ProcessingRequest, extracted_text: str, api_key: str) -> Optional[str]:
+        """Final LLM pass to verify and fix any missing text in the extracted content."""
+        import base64
+        import requests
+        import os
+        import fitz
+        
+        # Get document path
+        document_path = getattr(request, 'document_path', None) or getattr(request, 'pdf_path', None)
+        if not document_path or not document_path.exists():
+            return None
+        
+        # Only process PDFs for now
+        if document_path.suffix.lower() != '.pdf':
+            return None
+        
+        try:
+            model = os.getenv("OPENAI_MODEL", "gpt-4o")
+            base_url = "https://api.openai.com/v1/chat/completions"
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}"
+            }
+            
+            doc = fitz.open(str(document_path))
+            verified_pages = []
+            
+            # Process each page
+            for page_num in range(len(doc)):
+                page = doc[page_num]
+                
+                # Render page to image
+                pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+                img_bytes = pix.tobytes("png")
+                image_b64 = base64.b64encode(img_bytes).decode('utf-8')
+                
+                # Extract page content from extracted text (approximate)
+                page_start_idx = extracted_text.find(f"--- Page {page_num + 1} ---")
+                page_end_idx = extracted_text.find(f"--- Page {page_num + 2} ---")
+                if page_start_idx == -1:
+                    page_start_idx = 0
+                if page_end_idx == -1:
+                    page_end_idx = len(extracted_text)
+                
+                page_text = extracted_text[page_start_idx:page_end_idx]
+                
+                # Create verification prompt
+                prompt = f"""Review the extracted text below and compare it with this document page image.
+
+Extracted text for this page:
+{page_text[:2000] if len(page_text) > 2000 else page_text}
+
+Your task:
+1. Verify ALL text from the image is present in the extracted text
+2. Identify any missing text, headings, or content
+3. Fix any extraction errors or omissions
+4. Ensure complete accuracy and completeness
+5. Preserve structure, formatting, and layout
+6. Output the complete, verified text in clean markdown format
+
+Extract ALL text visible in the image, including any text that may have been missed.
+Return only the complete, verified text for this page in markdown format, no explanations."""
+                
+                payload = {
+                    "model": model,
+                    "max_tokens": 4000,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": prompt
+                                },
+                                {
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": f"data:image/png;base64,{image_b64}"
+                                    }
+                                }
+                            ]
+                        }
+                    ]
+                }
+                
+                try:
+                    response = requests.post(base_url, headers=headers, json=payload, timeout=60)
+                    
+                    if response.status_code == 200:
+                        response_data = response.json()
+                        verified_text = response_data['choices'][0]['message']['content']
+                        verified_pages.append(f"\n\n--- Page {page_num + 1} ---\n\n{verified_text}")
+                        logger.info(f"Final LLM verification completed for page {page_num + 1}")
+                    else:
+                        logger.warning(f"Final LLM verification failed for page {page_num + 1}, using original extraction")
+                        verified_pages.append(page_text)
+                except Exception as e:
+                    logger.warning(f"Final LLM verification error for page {page_num + 1}: {e}, using original extraction")
+                    verified_pages.append(page_text)
+            
+            doc.close()
+            
+            if verified_pages:
+                return "".join(verified_pages)
+            return None
+            
+        except Exception as e:
+            logger.warning(f"Final LLM verification failed: {e}")
+            return None
     
     def _apply_vision_validation(self, 
                                 request: ProcessingRequest, 
