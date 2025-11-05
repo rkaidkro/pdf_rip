@@ -32,21 +32,21 @@ def test_vision_validation():
         print("   Please set one of these in your .env file or environment")
         return
     
-    # Test document
-    test_doc = Path("processed/success/[Name]  - cl_1756545529.pdf")
+    # Test document (update path to your test document)
+    test_doc = Path("examples/test_document.pdf")
     
-    # Sample extracted markdown
-    sample_markdown = """07 Aug 2025
-CSIRO
-Melbourne
+    # Sample extracted markdown (using anonymized example data)
+    sample_markdown = """[Date]
+[Company]
+[Location]
 Re: Application for the position of Senior Software Developer
 Dear Sir/Madam,
-I am interested in applying for the position of Senior Software Developer as advertised by you on the Seek website. I am certain that my qualification and experience is at par with the job requirement. I also had NV1 Security clearance granted. Hereby I am providing you with a brief overview of my skill set.
-I finished my Masters in Information Technology from Swinburne University of Technology with distinction average. I have more than 15 years' experience working with an Agile, Scrum and Kanban methodologies in organisations like The University of Melbourne, Target Australia, and Lockheed Martin Australia.
-At University of Melbourne, I have built both the front-end and back-end of the applications to support Student Learning Services team. The front end was written in React/Typescript running on NodeJS server. Moreover, I have developed the CI pipelines using the GitHub actions. The backend RESTful APIs were written in Java 17 / Spring boot 3. At Target Australia, I have used multiple AWS services such as S3, AWS Lambda, API Gateway, DynamoDB etc which were provisioned using AWS CDK. I have also written IaC code using Terraform and exposed to Python programming language. Most importantly, I am a self-starter who likes to learn the new technologies and one who strives to find better ways to do things.
-I have excellent communication skills developed through my work experience. I am a dedicated team player who enjoys the company and support of my peers while being able to manage my priorities and work with minimal supervision. Above all, I have strong determination to achieve an excellent outcome for my employer.
-I look forward to discussing with you in person how my abilities can best serve your needs. I can be most easily reached on mobile [phone] or email: [email].
-Please find my resume in the attachment of this application for more information. Thank you for your consideration and I look forward to hearing from you soon.
+I am interested in applying for the position of Senior Software Developer. I am certain that my qualification and experience is at par with the job requirement. Hereby I am providing you with a brief overview of my skill set.
+I finished my Masters in Information Technology from [University] with distinction average. I have more than 15 years' experience working with Agile, Scrum and Kanban methodologies in various organizations.
+I have built both the front-end and back-end of applications. The front end was written in React/Typescript running on NodeJS server. Moreover, I have developed CI pipelines using GitHub actions. The backend RESTful APIs were written in Java 17 / Spring boot 3. I have used multiple AWS services such as S3, AWS Lambda, API Gateway, DynamoDB etc which were provisioned using AWS CDK. I have also written IaC code using Terraform and am familiar with Python programming language.
+I have excellent communication skills developed through my work experience. I am a dedicated team player who enjoys the company and support of my peers while being able to manage my priorities and work with minimal supervision.
+I look forward to discussing with you in person how my abilities can best serve your needs. Please contact me for further information.
+Thank you for your consideration and I look forward to hearing from you soon.
 Yours sincerely,
 [Name]"""
     

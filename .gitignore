@@ -43,6 +43,18 @@ test_markdown/
 test_processed/
 *.zip
 
+# Candidate data and PII - never commit real candidate documents
+input_example_file/
+*_candidate_*.pdf
+*_candidate_*.docx
+*_candidate_*.doc
+*_cv_*.pdf
+*_cv_*.docx
+*_cv_*.doc
+*_cover_letter_*.pdf
+*_cover_letter_*.docx
+*_cover_letter_*.doc
+
 # Logs
 *.log
 logs/
