@@ -21,13 +21,31 @@ class TextExtractor:
     def get_version(self) -> str:
         return self.version
     
-    def extract_text(self, pdf_path: Path) -> Dict[str, Any]:
-        """Extract text from PDF file using PyMuPDF."""
+    def extract_text(self, pdf_path: Path, api_key: Optional[str] = None, use_llm: bool = True) -> Dict[str, Any]:
+        """Extract text from PDF file. Uses LLM vision if available for better quality."""
         result = {
             "content": "",
             "provenance": []
         }
         
+        # Try LLM vision first if available (better quality for all PDFs)
+        if use_llm and api_key:
+            logger.info("Using LLM vision for text extraction (preferred method)")
+            try:
+                doc = fitz.open(str(pdf_path))
+                llm_result = self._extract_with_llm_vision(pdf_path, api_key, doc)
+                doc.close()
+                return llm_result
+            except Exception as e:
+                error_str = str(e)
+                # Check if it's a quota/billing error - fall back to standard extraction
+                if "quota" in error_str.lower() or "billing" in error_str.lower() or "insufficient_quota" in error_str:
+                    logger.warning(f"LLM vision API quota exceeded, falling back to standard extraction: {e}")
+                else:
+                    logger.warning(f"LLM vision extraction failed, falling back to standard extraction: {e}")
+                # Continue to standard extraction below
+        
+        # Fallback to standard extraction
         try:
             doc = fitz.open(str(pdf_path))
             
@@ -69,51 +87,22 @@ class TextExtractor:
         
         return result
     
-    def extract_text_from_bytes(self, pdf_bytes: bytes) -> Dict[str, Any]:
-        """Extract text from PDF bytes."""
-        result = {
-            "content": "",
-            "provenance": []
-        }
+    def extract_text_from_bytes(self, pdf_bytes: bytes, api_key: Optional[str] = None, use_llm: bool = True) -> Dict[str, Any]:
+        """Extract text from PDF bytes. Uses LLM vision if available."""
+        import tempfile
+        import os
+        
+        # Write bytes to temporary file and process
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
+            tmp_file.write(pdf_bytes)
+            tmp_path = Path(tmp_file.name)
         
         try:
-            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-            
-            for page_num in range(len(doc)):
-                page = doc[page_num]
-                
-                # Get text blocks with positioning
-                text_dict = page.get_text("dict")
-                
-                page_content = []
-                for block in text_dict["blocks"]:
-                    if "lines" in block:  # Text block
-                        for line in block["lines"]:
-                            for span in line["spans"]:
-                                text = span["text"]
-                                bbox = span["bbox"]
-                                
-                                page_content.append(text)
-                                
-                                # Create provenance record
-                                provenance = ProvenanceRecord(
-                                    page=page_num + 1,
-                                    bbox=bbox,
-                                    tool="pymupdf",
-                                    confidence=1.0,
-                                    element_hash=calculate_element_hash(text, bbox, page_num + 1),
-                                    element_type="text",
-                                    content_preview=text[:50]
-                                )
-                                result["provenance"].append(provenance)
-                
-                result["content"] += "\n".join(page_content) + "\n\n"
-            
-            doc.close()
-            
-        except Exception as e:
-            logger.error(f"Text extraction from bytes failed: {e}")
-            raise
+            result = self.extract_text(tmp_path, api_key=api_key, use_llm=use_llm)
+        finally:
+            # Clean up temporary file
+            if tmp_path.exists():
+                os.unlink(tmp_path)
         
         return result
     
@@ -150,6 +139,7 @@ class TextExtractor:
             
             # Fallback to traditional OCR
             logger.info("Using Tesseract OCR for text extraction")
+            ocr_content_by_page = []
             for page_num in range(len(doc)):
                 page = doc[page_num]
                 
@@ -210,7 +200,7 @@ class TextExtractor:
                         text = f"[OCR extraction failed: {str(ocr_error)}]"
                 
                 if text.strip():
-                    result["content"] += f"\n\n--- Page {page_num + 1} ---\n\n{text}"
+                    ocr_content_by_page.append((page_num + 1, text))
                     
                     # Create provenance record for OCR extraction
                     provenance = ProvenanceRecord(
@@ -223,6 +213,28 @@ class TextExtractor:
                         content_preview=text[:100] if len(text) > 100 else text  # Limit to 100 chars for ProvenanceRecord
                     )
                     result["provenance"].append(provenance)
+            
+            # If OCR was used and API key available, verify and fix with LLM
+            if ocr_content_by_page and api_key and use_llm:
+                logger.info("Verifying OCR results with LLM vision to fix missing text")
+                try:
+                    verified_content = self._verify_ocr_with_llm(pdf_path, api_key, doc, ocr_content_by_page)
+                    if verified_content:
+                        result["content"] = verified_content
+                        # Update provenance to indicate LLM verification
+                        for prov in result["provenance"]:
+                            if prov.tool == "ocr_extractor":
+                                prov.tool = "ocr_extractor+llm_verification"
+                                prov.confidence = min(prov.confidence + 0.1, 0.95)
+                    else:
+                        # If verification failed, use OCR results as-is
+                        result["content"] = "".join([f"\n\n--- Page {p} ---\n\n{t}" for p, t in ocr_content_by_page])
+                except Exception as e:
+                    logger.warning(f"LLM OCR verification failed, using OCR results as-is: {e}")
+                    result["content"] = "".join([f"\n\n--- Page {p} ---\n\n{t}" for p, t in ocr_content_by_page])
+            else:
+                # Use OCR results directly
+                result["content"] = "".join([f"\n\n--- Page {p} ---\n\n{t}" for p, t in ocr_content_by_page])
             
             doc.close()
             
@@ -341,6 +353,83 @@ Return only the extracted text in markdown format, no explanations."""
         
         result["content"] = "".join(full_content)
         return result
+    
+    def _verify_ocr_with_llm(self, pdf_path: Path, api_key: str, doc: fitz.Document, ocr_content_by_page: List[tuple[int, str]]) -> Optional[str]:
+        """Verify OCR results with LLM vision and fix any missing text."""
+        import base64
+        import requests
+        import os
+        
+        model = os.getenv("OPENAI_MODEL", "gpt-4o")
+        base_url = "https://api.openai.com/v1/chat/completions"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}"
+        }
+        
+        verified_content = []
+        
+        for page_num, ocr_text in ocr_content_by_page:
+            page = doc[page_num - 1]  # Convert to 0-based index
+            
+            # Render page to high-quality image
+            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+            img_bytes = pix.tobytes("png")
+            image_b64 = base64.b64encode(img_bytes).decode('utf-8')
+            
+            # Create verification prompt
+            prompt = f"""Review the OCR-extracted text below and compare it with this document page image.
+Your task:
+1. Check if any text is missing from the OCR extraction
+2. Verify the accuracy of the extracted text
+3. Fix any OCR errors or missing content
+4. Preserve structure, formatting, and layout
+5. Output the complete, corrected text in markdown format
+
+OCR-extracted text for reference:
+{ocr_text[:1000]}...
+
+Extract ALL text from the image, including any text that the OCR may have missed.
+Return only the complete, corrected text in markdown format, no explanations."""
+            
+            payload = {
+                "model": model,
+                "max_tokens": 4000,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": prompt
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/png;base64,{image_b64}"
+                                }
+                            }
+                        ]
+                    }
+                ]
+            }
+            
+            try:
+                response = requests.post(base_url, headers=headers, json=payload, timeout=60)
+                
+                if response.status_code == 200:
+                    response_data = response.json()
+                    verified_text = response_data['choices'][0]['message']['content']
+                    verified_content.append(f"\n\n--- Page {page_num} ---\n\n{verified_text}")
+                    logger.info(f"LLM verified and fixed OCR for page {page_num} ({len(verified_text)} chars)")
+                else:
+                    logger.warning(f"LLM verification failed for page {page_num}, using OCR result")
+                    verified_content.append(f"\n\n--- Page {page_num} ---\n\n{ocr_text}")
+            except Exception as e:
+                logger.warning(f"LLM verification error for page {page_num}: {e}, using OCR result")
+                verified_content.append(f"\n\n--- Page {page_num} ---\n\n{ocr_text}")
+        
+        return "".join(verified_content) if verified_content else None
     
     def extract_with_ocr_from_bytes(self, pdf_bytes: bytes, api_key: Optional[str] = None, use_llm: bool = True) -> Dict[str, Any]:
         """Extract text using OCR from PDF bytes."""

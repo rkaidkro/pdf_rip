@@ -559,10 +559,12 @@ class DocumentProcessor:
         # Get document path
         document_path = getattr(request, 'document_path', None) or getattr(request, 'pdf_path', None)
         if not document_path or not document_path.exists():
+            logger.warning("Document path not available for final LLM verification")
             return None
         
-        # Only process PDFs for now
+        # Only process PDFs for now (Word docs use standard extraction)
         if document_path.suffix.lower() != '.pdf':
+            logger.info("Skipping final LLM verification for non-PDF documents")
             return None
         
         try:

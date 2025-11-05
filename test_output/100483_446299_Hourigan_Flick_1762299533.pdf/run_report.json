@@ -1,0 +1,66 @@
+{
+  "run_id": "run_17b28e98_1762306689",
+  "timestamp": "2025-11-05T12:40:20.405370",
+  "input_file": "input/100483_446299_Hourigan_Flick_1762299533.pdf",
+  "output_dir": "test_output/100483_446299_Hourigan_Flick_1762299533.pdf",
+  "run_mode": "production",
+  "tools_used": [
+    "text_extractor",
+    "table_extractor",
+    "image_extractor",
+    "math_extractor",
+    "word_text_extractor",
+    "word_table_extractor",
+    "word_image_extractor"
+  ],
+  "tool_versions": {
+    "text_extractor": "1.0.0",
+    "table_extractor": "1.0.0",
+    "image_extractor": "1.0.0",
+    "math_extractor": "1.0.0",
+    "word_text_extractor": "1.0.0",
+    "word_table_extractor": "1.0.0",
+    "word_image_extractor": "1.0.0"
+  },
+  "quality_metrics": {
+    "cer": 0.0,
+    "wer": 0.0,
+    "table_grits": 0.0,
+    "math_token_match": 0.0,
+    "structure_accuracy": 0.0,
+    "provenance_coverage": 1.0,
+    "vision_confidence": null,
+    "content_completeness": null,
+    "image_caption_accuracy": null
+  },
+  "defects": [
+    {
+      "page": 0,
+      "element_type": "content",
+      "description": "Excessive whitespace detected",
+      "severity": "low",
+      "tool_used": "content_validator",
+      "fallback_applied": false,
+      "coordinates": null
+    },
+    {
+      "page": 1,
+      "element_type": "vision_validation",
+      "description": "Vision validation failed: Failed to convert document to image for vision validation",
+      "severity": "high",
+      "tool_used": "claude_vision",
+      "fallback_applied": false,
+      "coordinates": null
+    }
+  ],
+  "processing_time_s": 130.87244820594788,
+  "memory_peak_mb": 0.0,
+  "router_decisions": {},
+  "compliance_applied": {
+    "classification_tag": "UNCLASSIFIED",
+    "pii_redaction": false,
+    "export_assets": true
+  },
+  "success": false,
+  "error_message": null
+}
