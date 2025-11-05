@@ -41,6 +41,7 @@ example_output/
 test_input/
 test_markdown/
 test_processed/
+test_output/
 *.zip
 
 # Candidate data and PII - never commit real candidate documents
